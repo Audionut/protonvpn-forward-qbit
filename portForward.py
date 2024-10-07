@@ -3,7 +3,8 @@ import requests
 import time
 import os
 
-# Path to the ProtonVPN log file (Update this path)
+# Path to the ProtonVPN log files (Update this path)
+# Script will monitor all files in this path and chose the last modified
 log_dir_path = r'C:\Users\USERNAME\AppData\Local\ProtonVPN\Logs'
 
 # qBittorrent WebUI URL and credentials (Update these)
