@@ -31,21 +31,38 @@ def get_latest_log_file(log_dir):
         return None
 
 
-# Function to parse the latest log file and retrieve the forwarded port
+# Function to read the log file from the bottom and find the latest port pair
 def get_forwarded_port_from_log(log_file):
     try:
-        with open(log_file, 'r') as log_file:
-            log_data = log_file.read()
+        with open(log_file, 'rb') as f:
+            # Move the file pointer to the end of the file
+            f.seek(0, os.SEEK_END)
+            file_size = f.tell()
+            buffer_size = 8192  # Read in chunks of 8KB
 
-            # Regular expression to match the port pair in the log format
-            match = re.search(r'Port pair (\d+)->\1', log_data)
-            if match:
-                forwarded_port = match.group(1)
-                print(f"Found Forwarded Port: {forwarded_port}")
-                return forwarded_port
+            # Start reading the file from the end
+            if file_size > buffer_size:
+                f.seek(-buffer_size, os.SEEK_END)
             else:
-                print("Forwarded port not found in the log.")
-                return None
+                f.seek(0)
+
+            # Read the file from the point where we positioned the pointer
+            data = f.read().decode('utf-8')
+
+            # Split the data into lines and reverse the lines for backward reading
+            lines = data.splitlines()[::-1]
+
+            # Iterate through the lines and find the first match for "Port pair"
+            for line in lines:
+                match = re.search(r'Port pair (\d+)->\1', line)
+                if match:
+                    forwarded_port = match.group(1)
+                    print(f"Found Forwarded Port: {forwarded_port}")
+                    return forwarded_port
+
+            print("Forwarded port not found in the log.")
+            return None
+
     except FileNotFoundError:
         print("Log file not found. Please check the path.")
         return None
@@ -92,7 +109,7 @@ def main():
             latest_log_file = get_latest_log_file(log_dir_path)
 
             if latest_log_file:
-                # Get the forwarded port from the log file
+                # Get the forwarded port from the log file (starting from the bottom)
                 forwarded_port = get_forwarded_port_from_log(latest_log_file)
 
                 # If a valid port is found and it's different from the last one
@@ -103,7 +120,6 @@ def main():
 
             # Wait for 60 seconds before checking again
             time.sleep(60)
-
 
 if __name__ == "__main__":
     main()
