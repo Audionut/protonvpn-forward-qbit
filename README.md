@@ -9,4 +9,5 @@ Checks the ProtonVPN logs every minute and updates qBittorrent if a port change 
     - `qb_username = "username"`
     - `qb_password = "password"`
 - Run `py portForward.py` from an elevated command prompt.
+- Run with `--verbose` if you want to see the updates every minute.
 - Setup a task schedule `https://chatgpt.com/share/67039a6a-7ec0-8004-a25a-9623324550d6`
