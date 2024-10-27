@@ -4,6 +4,7 @@ import time
 import os
 import argparse
 import xmlrpc.client
+from functools import wraps
 
 # Path to the ProtonVPN log files (Update this path)
 # Script will monitor all files in this path and chose the last modified
@@ -25,13 +26,29 @@ deluge_password = "deluge"
 last_forwarded_port = None
 
 
+# Retry decorator
+def retry(retries=3, delay=5):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            attempt = 0
+            while attempt < retries:
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    print(f"Attempt {attempt + 1} failed: {e}")
+                    attempt += 1
+                    time.sleep(delay)
+            print(f"Failed after {retries} attempts.")
+            return None
+        return wrapper
+    return decorator
+
+
 # Function to find the latest modified log file in the log directory
 def get_latest_log_file(log_dir, verbose):
     try:
-        # List all files in the directory
         log_files = [os.path.join(log_dir, f) for f in os.listdir(log_dir) if os.path.isfile(os.path.join(log_dir, f))]
-
-        # Find the most recently modified file
         latest_log_file = max(log_files, key=os.path.getmtime)
 
         if verbose:
@@ -46,24 +63,18 @@ def get_latest_log_file(log_dir, verbose):
 def get_forwarded_port_from_log(log_file, verbose):
     try:
         with open(log_file, 'rb') as f:
-            # Move the file pointer to the end of the file
             f.seek(0, os.SEEK_END)
             file_size = f.tell()
-            buffer_size = 8192  # Read in chunks of 8KB
+            buffer_size = 8192
 
-            # Start reading the file from the end
             if file_size > buffer_size:
                 f.seek(-buffer_size, os.SEEK_END)
             else:
                 f.seek(0)
 
-            # Read the file from the point where we positioned the pointer
             data = f.read().decode('utf-8')
-
-            # Split the data into lines and reverse the lines for backward reading
             lines = data.splitlines()[::-1]
 
-            # Iterate through the lines and find the first match for "Port pair"
             for line in lines:
                 match = re.search(r'Port pair (\d+)->\1', line)
                 if match:
@@ -83,7 +94,7 @@ def get_forwarded_port_from_log(log_file, verbose):
         return None
 
 
-# Function to log in to qBittorrent's WebUI
+@retry(retries=3, delay=5)
 def qb_login(session, verbose):
     login_url = f"{qb_url}/api/v2/auth/login"
     data = {"username": qb_username, "password": qb_password}
@@ -91,15 +102,13 @@ def qb_login(session, verbose):
     if response.text == "Ok.":
         print("Logged in successfully.")
     else:
-        print(f"Failed to log in: {response.text}")
-        exit(1)
+        raise Exception(f"Failed to log in: {response.text}")
 
 
-# Function to update the qBittorrent listening port
 def update_qbittorrent_port(session, new_port, verbose):
     settings_url = f"{qb_url}/api/v2/app/setPreferences"
     payload = {
-        "json": '{"listen_port": %d}' % int(new_port)  # Update the listening port
+        "json": '{"listen_port": %d}' % int(new_port)
     }
     response = session.post(settings_url, data=payload)
     if response.status_code == 200:
@@ -109,7 +118,7 @@ def update_qbittorrent_port(session, new_port, verbose):
         print(f"Failed to update the qBittorrent listening port: {response.status_code}, {response.text}")
 
 
-# Function to update the rTorrent listening port
+@retry(retries=3, delay=5)
 def update_rtorrent_port(new_port, verbose):
     try:
         server = xmlrpc.client.ServerProxy(rtorrent_url)
@@ -117,10 +126,10 @@ def update_rtorrent_port(new_port, verbose):
         if verbose:
             print(f"rTorrent listening port updated to {new_port}.")
     except Exception as e:
-        print(f"Failed to update rTorrent port: {e}")
+        raise Exception(f"Failed to update rTorrent port: {e}")
 
 
-# Function to log in to Deluge WebUI
+@retry(retries=3, delay=5)
 def deluge_login(session, verbose):
     login_url = f"{deluge_url}"
     payload = {"method": "auth.login", "params": [deluge_password], "id": 1}
@@ -130,11 +139,9 @@ def deluge_login(session, verbose):
         if verbose:
             print("Logged in to Deluge successfully.")
     else:
-        print("Failed to log in to Deluge.")
-        exit(1)
+        raise Exception("Failed to log in to Deluge.")
 
 
-# Function to update the Deluge listening port
 def update_deluge_port(session, new_port, verbose):
     settings_url = f"{deluge_url}"
     payload = {
@@ -150,11 +157,8 @@ def update_deluge_port(session, new_port, verbose):
         print(f"Failed to update the Deluge listening port: {response.status_code}, {response.text}")
 
 
-# Main function to check the log every minute and update qBittorrent/rTorrent/Deluge if necessary
 def main():
-    global last_forwarded_port  # Use the global variable to track the last forwarded port
-
-    # Set up argparse for command-line arguments
+    global last_forwarded_port
     parser = argparse.ArgumentParser(description="Monitor ProtonVPN logs and update qBittorrent, rTorrent, or Deluge port.")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
     parser.add_argument("--rtorrent", action="store_true", help="Update rTorrent port instead of qBittorrent")
@@ -163,35 +167,26 @@ def main():
 
     with requests.Session() as session:
         if args.deluge:
-            # Log in to Deluge first
             deluge_login(session, args.verbose)
         elif not args.rtorrent:
-            # Log in to qBittorrent first (default)
             qb_login(session, args.verbose)
 
         while True:
-            # Get the latest log file in the directory
             latest_log_file = get_latest_log_file(log_dir_path, args.verbose)
 
             if latest_log_file:
-                # Get the forwarded port from the log file (starting from the bottom)
                 forwarded_port = get_forwarded_port_from_log(latest_log_file, args.verbose)
 
-                # If a valid port is found and it's different from the last one
                 if forwarded_port and forwarded_port != last_forwarded_port:
                     print(f"Updating listening port to: {forwarded_port}")
                     if args.rtorrent:
-                        # Update rTorrent port
                         update_rtorrent_port(forwarded_port, args.verbose)
                     elif args.deluge:
-                        # Update Deluge port
                         update_deluge_port(session, forwarded_port, args.verbose)
                     else:
-                        # Update qBittorrent port (default)
                         update_qbittorrent_port(session, forwarded_port, args.verbose)
-                    last_forwarded_port = forwarded_port  # Update the in-memory last port
+                    last_forwarded_port = forwarded_port
 
-            # Wait for 60 seconds before checking again
             time.sleep(60)
 
 
